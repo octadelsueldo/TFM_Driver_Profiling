@@ -1,0 +1,562 @@
+---
+title: "Feature engineering CLEAN"
+output: html_document
+---
+
+```{r setup, include=FALSE, dpi=500}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRERÍAS
+
+```{r Libraries, include = FALSE}
+
+  # Carga y limpieza de datos
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(magrittr)
+library(janitor)
+library(imputeTS)
+
+  # EDA
+library(ggplot2)
+library(skimr)
+library(PerformanceAnalytics)
+library(corrplot)
+library(DataExplorer)
+
+```
+
+
+## BASES DE DATOS
+
+```{r load data}
+
+  # Cargamos los datos
+raw_data <- read_csv("../00_data/1_preprocessed/raw_data_clean.csv") 
+
+  # Visualizamos los datos
+raw_data
+
+```
+
+Una vez hemos cargado los datos, exploramos su estructura, tipos de datos y nulos...
+
+```{r view data}
+
+  # Nombres de las columnas
+names(raw_data)
+
+  # Visualizamos el dataset
+head(raw_data, 10)
+tail(raw_data, 10)
+
+  # Estructura de los datos
+str(raw_data)
+
+  # Dimensión de la base de datos
+dim(raw_data)
+
+  # Valores nulos
+summarise_all(raw_data, funs(sum(is.na(.))))
+
+```
+
+***
+***
+
+## EDA
+
+A continuación realizaremos un EDA automático:
+
+```{r automatic EDA}
+
+  # Creamos el reporte automático
+# create_report(raw_data)
+
+  # Primer vistazo a los datos
+introduce(raw_data)
+
+  # Plot de la descripción básica
+plot_intro(raw_data)
+
+  # Plot de los nulos
+plot_missing(raw_data)
+
+```
+
+***
+***
+
+## FEATURE ENGINEERING
+
+Una vez hemos visto el EDA, ya tenemos claras las principales transformaciones que deberemos realizar sobre las variables:
+
+### Eliminación de variables
+
+Por conocimiento de negocio, eliminaremos las siguientes variables de nuestro dataset:
+
+```{r drop variables}
+
+  # Creamos un nuevo dataset con el que trabajar
+data_eng <- raw_data
+
+  # Creamos un vector con las columnas que eliminamos
+columnas <- c("X1", "COD_VOUCHER", "COD_ZONA_CIRCUL", "COD_COM", "TARA", "POTENCIA", "FEC#NAC", "FEC_EXP_LIC", "MODELO", "FEC_PARADA_Min", "FEC_PARADA_Max", "VMax_Max", "VMax_Min", "VMed_Max", "VMed_Min", "Dist_max", "Dist_min", "Durac_Max", "Durac_Min", "filter_$", "FEC_ARRANQUE_Min")
+
+  # Dropeamos esas columnas...
+data_eng %<>% select(-all_of(columnas))
+
+```
+
+Ahora disponemos de un dataset con 26 variables, el siguiente paso será tratar con los nulos:
+
+### Tratamiento de nulos
+
+```{r null values}
+
+## ELIMINACIÓN DE NULOS
+
+  # Creamos un vector con las columnas a las que le eliminaremos los nulos
+columnas <- c("SEXO", "ANT_LIC", "EDAD")
+
+  # Eliminamos los nulos de dichas columnas
+data_eng %<>% drop_na(columnas)
+
+## SUSTITUCIÓN DE NULOS POR CEROS
+
+  # Sustituimos el resto de los nulos con ceros
+data_eng %<>% na_replace(0)
+
+## RESULTADO
+plot_missing(data_eng)
+
+```
+
+Una vez tenemos el dataset sin valores nulos (tan solo hemos perdido el 3% de las filas), transformaremos algunas variables...
+
+### Transformación de variables (unidades de medida)
+
+Para trabajar de una manera más cómoda transformaremos las variables de las distancias a km (recordemos que están en metros) y las de duración a minutos (actualmente están en segundos):
+
+```{r transform variables}
+
+  # Comenzamos con la variable de distancia:
+data_eng %<>% mutate(Dist_med_km = Dist_med/1000)
+
+  # Ahora, la variable duración
+data_eng %<>% mutate(Durac_med_min = Durac_med/60)
+
+  # Eliminamos las antiguas variables
+data_eng %<>% select(-Durac_med, -Dist_med)
+
+```
+
+### Creación de nuevas variables
+
+A coninuación, crearemos nuevas variables a partir de otras... En este caso, crearemos nuevas variables en función del tipo de vía, crearemos una variable flag para las marcas de los vehículos, calcularemos la distancia total recorrida en el producto, la intensidad de uso del vehículo...
+
+```{r new variables}
+
+## TIPOS DE VIA
+
+  # Crearemos 3 tipos de vía en función de las velocidades, y pasaremos a km la distancia recorrida por tipo de vía, por último, eliminaremos las antiguas variables...
+data_eng %<>% 
+  mutate(vias_alta_capacidad_km = (METROS_TIPO_VIA_0_Mean + METROS_TIPO_VIA_1_Mean)/1000,
+         vias_urbanas_km = (METROS_TIPO_VIA_2_Mean + METROS_TIPO_VIA_3_Mean + METROS_TIPO_VIA_4_Mean + METROS_TIPO_VIA_5_Mean + METROS_TIPO_VIA_6_Mean + METROS_TIPO_VIA_7_Mean)/1000,
+         resto_carreteras_km = (METROS_TIPO_VIA_8_Mean + METROS_TIPO_VIA_X_Mean)/1000) %>%
+  select(!starts_with("METROS"))
+
+
+## MARCAS UTILIZADAS Y OTRAS
+
+  # Crearemos una variable dicotómica, que indique si el conductor tiene alguna de las marcas más utilizadas o posee otra:
+columnas <- c("SEAT", "RENAULT", "OPEL", "PEUGEOT", "VOLKSWAGEN", "CITROEN")
+data_eng %<>% 
+  mutate(Tipo_de_marca = ifelse(MARCA %in% columnas, "Marcas utilizadas", "Otras")) %>%
+  select(-MARCA)
+
+
+## CRASH_FLAG
+
+  # Vamos a crear una variable que indique si el conductor a tenido ningún siniestro o al menos uno
+data_eng %<>% mutate(crash_flag = factor(ifelse(N_Crashes == 0, 0, 1)))
+
+
+## CRASHES HASTA 3 O MÁS
+
+  # A continuación, crearemos una nueva variable que indique el número de crashes discretizando por: "Ninguno", "Uno", "Dos", Tres o más" 
+data_eng %<>% mutate(Crash_categorica = ifelse(N_Crashes == 0, "Ninguno",
+                                               ifelse(N_Crashes == 1, "Uno",
+                                               ifelse(N_Crashes == 2, "Dos", "Tres o mas"))))
+
+
+## DISTANCIA TOTAL RECORRIDA EN EL PRODUCTO
+
+  # Calcularemos la distancia recorrida en el producto, para ello multiplicaremos la distancia media por el número de registros
+data_eng %<>%
+  mutate(dist_total_media_km = (Recuento_registros * Dist_med_km))
+
+
+## INTENSIDAD DE USO DEL VEHÍCULO
+
+  # Podemos calcular la intensidad de uso del vehículo dividiendo el número de registros por los días
+data_eng %<>%
+  mutate(intensidad_uso_diario = (Recuento_registros/dias))
+
+
+## DIAS DESDE EL ÚLTIMO ARRANQUE
+
+  # Calcularemos los días desde el último arranque con el objetivo de saber si es un usuario que utiliza el coche con frecuencia o no... Para ello, restaremos la última fecha de la base de datos (31-12-2013) a la fecha del último arranque:
+data_eng %<>% 
+  mutate(dias_desde_ultimo_arranque = (as.Date('2013-12-31') - FEC_ARRANQUE_Max)) %>%
+  select(-FEC_ARRANQUE_Max)
+
+
+## DISTANCIA ANUAL CORREGIDA
+
+  # Calcularemos la distacia anual recorrida por el ususario, para ello, calcularemos la distancia partido los dias (distancia_total_dia) y multiplicaremos por 365 de manera que obtengamos los km anuales del asegurado
+
+data_eng %<>%
+  mutate(distancia_total_dia = dist_total_media_km/dias) %>%
+  mutate(distancia_anual = distancia_total_dia*365)
+
+
+## KM EQUIVALENTES
+  
+  # Una vez identificada la distancia anual recorrida de forma efectiva por cada conductor, procedimos a efectuar dos correcciones sobre ella. La primera, multiplicarla por los años de experiencia del conductor transcurridos desde la obtención de la licencia de conducción, aplicando un factor de corrección a partir del 4º año de carné igual a la raíz cuadrada del exceso sobre tres años, para definir la variable kilómetros de experiencia equivalentes (km_equiv).
+
+data_eng %<>%
+  mutate(km_equivalentes = ifelse(ANT_LIC > 3, distancia_anual * (3 + sqrt(ANT_LIC-3)), distancia_anual*ANT_LIC))
+
+
+## NULOS
+
+plot_missing(data_eng)
+
+```
+
+Una vez hemos creado las nuevas variables y comprobado que no hemos generado valores nulos, filtraremos los datos...
+
+### Filtrado
+
+```{r filter}
+
+  # Creamos un nuevo dataset sobre el que trabajar...
+data_filter <- data_eng
+
+  # Seleccionamos los conductores con edades entre 18 y 30, experiencia hasta 13 años y con al menos 60 registros y 30 dias en el producto
+data_filter %<>% filter(between(EDAD, 18, 30),
+                        between(ANT_LIC, 0, 13),
+                        between(dias, 30, max(dias)))
+
+```
+
+
+### Corregimos errores de la base de datos
+
+```{r show errors}
+
+data_sort <- data_filter[order(data_filter$EDAD), ]
+data_sort[15, ]
+
+```
+
+
+Tal y como podemos observar en el chunk anterior, existen algunos conductores con edades o antigüedades de licencia incongruentes, ya que un conductor con 18 años no puede tener 4 años de experiencia en el carnet de conducir... Es por ello, que eliminaremos este tipo de errores:
+
+```{r correct data}
+
+  # Creamos una nueva base de datos
+data_without_errors <- data_filter
+
+  # Eliminamos los errores
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 18 & data_without_errors$ANT_LIC > 1 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 19 & data_without_errors$ANT_LIC > 2 ) ,] 
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 20 & data_without_errors$ANT_LIC > 3 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 21 & data_without_errors$ANT_LIC > 4 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 22 & data_without_errors$ANT_LIC > 5 ) ,] 
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 23 & data_without_errors$ANT_LIC > 6 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 24 & data_without_errors$ANT_LIC > 7 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 25 & data_without_errors$ANT_LIC > 8 ) ,] 
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 26 & data_without_errors$ANT_LIC > 9 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 27 & data_without_errors$ANT_LIC > 10 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 28 & data_without_errors$ANT_LIC > 11 ) ,] 
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 29 & data_without_errors$ANT_LIC > 12 ) ,]
+data_without_errors <- data_without_errors[!(data_without_errors$EDAD == 30 & data_without_errors$ANT_LIC > 13 ) ,]
+
+  # Por último, limpiamos los nombres
+data_without_errors %<>% clean_names()
+
+```
+
+***
+***
+
+## EDA 2
+
+Una vez hemos limpiado los datos, tratado los nulos, eliminado posibles errores y generado las nuevas variables es hora de analizar los nuevos datos que tenemos. Para ello, crearemos distintos plots con el objetivo de analizar los datos:
+
+### Distribución del Sexo
+
+```{r sex distribution}
+
+  # Primero creamos un nuevo dataset
+data <- data_without_errors
+
+  # Transformamos la variable sexo
+data %<>% mutate(sexo = ifelse(sexo == 1, "Hombre", "Mujer"))
+
+  # Ploteamos la distribución del sexo
+data %>% 
+  ggplot(aes(sexo, fill = sexo)) + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) +
+  ylab("Porcentaje")
+
+  # Creamos una tabla con la información
+data %>%
+  group_by(sexo) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+```
+
+Como podemos observar tenemos una mayor proporción de hombres que de mujeres, en concreto, un 55% de hombres y un 44% de mujeres.
+
+### Distribución de la intensidad de uso
+
+```{r rides distribution}
+
+  # Plot
+
+data %>%
+  ggplot(aes(intensidad_uso_diario)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Daily usage intensity", 
+       subtitle = "(2007-2013)",
+       x = "Journeys per day",
+       y = "Frequency") +
+   theme_light()
+
+  # Resumen
+summary(data$intensidad_uso_diario)
+
+```
+
+En el gráfico superior podemos observar como los usuarios suelen utilizar de media unas 3 veces el vehículo al día...
+
+### Distribución de la intensidad de uso y el sexo
+
+```{r sex and rides}
+
+data %<>% mutate(sexo = ifelse(sexo == "Hombre", "Men", "Women"))
+
+  # Definimos la variable
+x <- data$intensidad_uso_diario
+
+  # Plot
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  ggplot(aes(quintiles, fill = sexo))  + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) +
+  labs(title = "Sex distribution in the quintiles of intensity of use", 
+       subtitle = "(2007-2013)",
+       x = "Quintiles",
+       y = "Frequency") +
+   theme_light()
+
+```
+
+Como podemos observar son los hombres los que mayor intensidad de uso realizan al vehículo...
+
+### Distribución de la intensidad de uso y los crashes
+
+```{r crash and rides}
+
+  # Definimos la variable
+x <- data$intensidad_uso_diario
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios)) +
+  geom_line(color = "skyblue4") +
+  geom_point(color = "skyblue4") +
+  labs(title = "Number of crashes vs. intensity of use", 
+       subtitle = "(2007-2013)",
+       x = "Quintiles of daily use intensity",
+       y = "Crashes") +
+   theme_light()
+
+  # Summary
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(crashes_medios = mean(n_crashes))
+
+```
+Como podemos observar, cuanto más km recorren los usuarios mayor siniestralidad, esto tiene sentido ya que están más expuestos al riesgo.
+
+### Distribución de la intensidad de uso y los crashes discriminando por sexo
+
+```{r crash, rides and sex}
+
+  # Definimos la variable
+x <- data$intensidad_uso_diario
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  labs(title = "Number of crashes vs. intensity of use", 
+       subtitle = "(2007-2013)",
+       x = "Quintiles of daily use intensity",
+       y = "Crashes") +
+   theme_light()
+
+  # Summary
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes))
+
+```
+
+Como podemos observar, los hombres son más propensos a la siniestralidad sin importar la intensidad de uso del vehículo...
+
+### Distribución de la experiencia y los crashes
+
+```{r crash and exp}
+
+  # Definimos la variable
+x <- data$intensidad_uso_diario
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(ant_lic_med = mean(ant_lic),
+            ant_lic_sd = sd(ant_lic)) %>%
+  ggplot(aes(x = quintiles, y = ant_lic_med)) +
+  geom_line(color = "skyblue4") +
+  geom_point(color = "skyblue4") +
+  labs(title = "Experience vs. intensity of use", 
+       subtitle = "(2007-2013)",
+       x = "Quintiles of daily use intensity",
+       y = "Avg. Experience in years") +
+   theme_light()
+
+  # Summary
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(ant_lic_med = mean(ant_lic),
+            ant_lic_sd = sd(ant_lic),
+            ymin = ant_lic_med-ant_lic_sd,
+            ymax = ant_lic_med+ant_lic_sd)
+
+```
+
+Como podemos observar son los conductores menos experimentados los que más utilizan el vehículo, por lo que tiene sentido afirmar que los menos experimentados son los que más accidentes tienen...
+
+### Distribución de la experiencia y los crashes discriminando por sexo
+
+```{r crash, exp and sex, dpi=1000}
+
+  # Definimos la variable
+x <- data$ant_lic
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  labs(title = "Experience vs. Crashes", 
+       subtitle = "(2007-2013)",
+       x = "Quintiles of experience",
+       y = "Crashes") +
+  theme_light()
+
+  # Summary
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes))
+
+```
+
+```{r PRUEBA}
+
+x <- data$km_equivalentes
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  ggtitle("Crashes medios en función de los quintiles de los km_equiv") +
+  xlab("Quintiles de km_equiv") +
+  ylab("Crashes medios")
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(experiencia_media = mean(ant_lic)) %>%
+  ggplot(aes(x = quintiles, y = experiencia_media, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  ggtitle("Experiencia media en función de los quintiles de los km_equiv") +
+  xlab("Quintiles de km_equiv") +
+  ylab("Experiencia media")
+
+
+```
+
+
+Como podemos observarm son los conductores con menos experiencia aquellos que tienen mayores crahses... Con la edad podemos ver lo mismo...
+
+### Distribución de la edad y los crashes discriminando por sexo
+
+```{r crash, years and sex}
+
+  # Definimos la variable
+x <- data$edad
+
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  ggtitle("Crashes medios en función de los quintiles de la edad") +
+  xlab("Quintiles de la edad") +
+  ylab("Crashes medios")
+
+  # Summary
+data %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes))
+
+```
+
+
+***
+***
+
+## GUARDAMOS EL DATASET
+
+```{r save data}
+
+write.csv(data, file="data_processed.csv")
+
+```
+

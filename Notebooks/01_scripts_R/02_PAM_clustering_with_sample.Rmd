@@ -1,0 +1,348 @@
+---
+title: "Clustering with sample"
+output: html_document
+---
+
+```{r setup, include=FALSE, dpi=500}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- Librerías -->
+
+```{r Libraries, include = FALSE}
+
+  # Carga y limpieza de datos
+library(readr)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(imputeTS)
+library(skimr)
+
+
+  # Cluster y ANACOR
+library(FactoMineR)
+library(factoextra)
+library(clustertend)
+library(NbClust) 
+library(cluster)
+library(Rtsne)
+
+  # Semila
+set.seed(1322)
+
+```
+
+## OBJETIVO DE ESTE NOTEBOOK
+
+*El objetivo de este notebook es intentar justifacar la relación entre la intensidad de uso, la experiencia y los crashes*
+
+```{r crash and exp}
+
+  # Cargamos la base de datos
+data_plot <- read_csv("../00_data/2_processed/data_processed.csv")
+
+# -----------------------------------------------------------------------------------------
+
+  # Definimos la variable
+x <- data_plot$intensidad_uso_diario
+
+data_plot %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(ant_lic_med = mean(ant_lic)) %>%
+  ggplot(aes(x = quintiles, y = ant_lic_med)) +
+  geom_line(color = "deepskyblue") +
+  geom_point(color = "deepskyblue") +
+  ggtitle("Intensidad de uso en quintiles en función de la experiencia") +
+  xlab("Quintiles de la intensidad de uso") +
+  ylab("Experiencia media (años)")
+
+  # Summary
+data_plot %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles) %>%
+  summarise(ant_lic_med = mean(ant_lic))
+
+# ----------------------------------------------------------------------------------------------
+
+x <- data_plot$ant_lic
+
+data_plot %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes)) %>%
+  ggplot(aes(x = quintiles, y = crashes_medios, group = sexo)) +
+  geom_line(aes(color = sexo)) +
+  geom_point(aes(color = sexo)) +
+  ggtitle("Crashes medios en función de los quintiles de la experiencia") +
+  xlab("Quintiles de la experiencia") +
+  ylab("Crashes medios")
+
+  # Summary
+data_plot %>%
+  within(quintiles <- as.integer(cut(x, quantile(x, probs=0:5/5), include.lowest=TRUE))) %>%
+  group_by(quintiles, sexo) %>%
+  summarise(crashes_medios = mean(n_crashes))
+
+```
+
+## BASE DE DATOS
+
+```{r load data}
+
+raw_data_original <- read_csv("../00_data/2_processed/data_processed.csv")
+
+raw_data_original <- as.data.frame(raw_data_original)
+
+  # Creamos una muestra de 30.000
+raw_data <- sample_n(raw_data_original, 
+                     size = 30000,
+                     replace = FALSE)
+
+```
+
+Visualizamos los datos
+
+```{r view data}
+
+  # Nombres de las columnas
+names(raw_data)
+
+  # Visualizamos el dataset
+head(raw_data, 10)
+tail(raw_data, 10)
+
+  # Estructura de los datos
+str(raw_data)
+
+  # Dimensión de la base de datos
+dim(raw_data)
+
+  # Comprobamos que no tenemos nulos
+sum(is.na(raw_data))
+
+```
+
+Una vez tenemos el dataset limpio cargado, procederemos a realizar un segundo procesamiento de datos para los clusters...
+
+***
+***
+
+## PROCESAMIENTO DE DATOS
+
+```{r data processing}
+
+  # Probamos un cluster por intensidades para forzar que cuanta menos experiencia mas crashes
+data <- raw_data %>%
+  select(pesopot, edad, ant_lic, intensidad_uso_diario)
+
+  # Comprobamos la dimension...
+dim(data)
+
+  # Creamos una muestra con la que lanzar el número óptimo de clusters
+data_sample <- sample_n(data, 
+                        size = 10000,
+                        replace = FALSE)
+
+  # Calculamos la distancia de de la muestra
+diss_euclidean_sample <- daisy(data_sample, metric = "euclidean", stand = FALSE)
+
+```
+
+***
+***
+
+## PAM
+
+Ahora que tenemos una matriz de distancias, tenemos que elegir un algoritmo de clustering para inferir similitudes/disimilitudes a partir de estas distancias. Al igual que K-means y los algoritmos jerárquicos van de la mano de la distancia euclidiana, el algoritmo Partitioning Around Medoids (PAM) va de la mano de la distancia Gower. PAM es un procedimiento de clustering iterativo igual que el K-means, pero con algunas ligeras diferencias. En lugar de los centroides de la agrupación K-means, PAM itera una y otra vez hasta que los medoides no cambian de posición. El medoide de un cluster es un miembro del cluster que es representativo de la mediana de todos los atributos considerados.
+
+
+### Cálculo del número óptimo de grupos
+
+La anchura de la silueta es una de las opciones más populares a la hora de seleccionar el número óptimo de clusters. Mide la similitud de cada punto con su clúster, y la compara con la similitud del punto con el clúster vecino más cercano. Esta métrica oscila entre -1 y 1, donde un valor más alto implica una mayor similitud de los puntos con sus clusters. Por lo tanto, un valor más alto de la Anchura de la Silueta es deseable. Calculamos esta métrica para un rango de números de cluster y encontramos dónde se maximiza.
+
+```{r silhouette}
+
+silhouette <- c()
+silhouette = c(silhouette, NA)
+for(i in 2:5){
+  pam_clusters = pam(as.matrix(diss_euclidean_sample),
+                 diss = TRUE,
+                 k = i)
+  silhouette = c(silhouette ,pam_clusters$silinfo$avg.width)
+}
+plot(1:5, silhouette,
+     xlab = "Clusters",
+     ylab = "Silhouette Width")
+lines(1:5, silhouette)
+
+```
+
+### Clustering
+
+Una vez tenemos claro que el número de grupos es 2, lanzaremos un PAM:
+
+```{r PAM with eclust}
+
+  # Ploteamos los clusters
+pam_2G <- eclust(data, FUNcluster = "pam", stand = TRUE, hc_metric = "euclidean", k = 2, seed = 1322)
+
+  # Cluster con geom = "point" para que no salgan las etiquetas de las observaciones
+fviz_cluster(pam_2G, geom = "point") +
+  labs(title = "PAM clustering")
+
+  # Silueta
+fviz_silhouette(pam_2G)
+
+```
+
+
+### Resumen de cada grupo
+
+```{r data groups}
+
+  # Clusters
+Grupos_variables <- pam_2G$clustering
+
+  # Generación del dataset
+data_cluster <- as.data.frame(cbind(Grupos_variables, raw_data))
+
+```
+
+#### Grupo 1:
+
+```{r first group}
+
+  # Seleccionamos el primer grupo
+grupo1 <- data_cluster %>% filter(Grupos_variables == 1)
+ 
+  # Realizamos un summary
+summary(grupo1)
+
+```
+
+#### Grupo 2:
+
+```{r second group}
+
+  # Seleccionamos el primer grupo
+grupo2 <- data_cluster %>% filter(Grupos_variables == 2)
+ 
+  # Realizamos un summary
+summary(grupo2)
+
+```
+
+***
+
+```{r save cluster data}
+
+  # Guardamos el nuevo dataset
+write.csv(x = data_cluster,
+          file = "../00_data/3_clusters/data_clustering.csv")
+
+```
+
+***
+
+
+### Visualización de los datos
+
+```{r cluster x exp}
+
+  # Aqui podemos observar como los conductores de temprena edad están asociados al primer grupo, mientras que los más experimentados al segundo
+raw_data %>%
+  mutate(cluster = as.factor(pam_2G$clustering)) %>%
+  ggplot(aes(x = ant_lic, fill = cluster)) +
+  geom_bar(aes(y = (..count..)/sum(..count..)))  +
+  labs(title = "Experience by clustering groups", 
+       subtitle = "(2007-2013)", 
+       caption = "Own elaboration",
+       x = "Experience in years",
+       y = "Percentage") +
+   theme_light()
+  
+```
+
+```{r cluster x exp table}
+
+  # De manera tabular podemos observarlo asi
+raw_data %>%
+  mutate(cluster = pam_2G$clustering) %>%
+  group_by(ant_lic, cluster) %>%
+  summarise(n = n(),
+            media_edad = mean(edad)) %>%
+  mutate(freq = n/sum(n))
+  
+```
+
+```{r cluster x crash}
+
+  # Aqui podemos observar como los conductores de temprena edad están asociados al primer grupo, mientras que los más experimentados al segundo
+raw_data %>%
+  mutate(crash_categorica = as.factor(crash_categorica),
+         cluster = as.factor(pam_2G$clustering)) %>%
+  filter(crash_categorica != "Ninguno") %>%
+  ggplot(aes(x = cluster, fill = crash_categorica)) +
+  geom_bar(aes(y = (..count..)/sum(..count..))) +
+  ylab("Porcentaje") +
+  ggtitle("Crashes por cluster") +
+  guides(fill = guide_legend(title = "Crashes discretizados"))
+  
+```
+
+```{r categorical crash per experience}
+
+raw_data %>%
+  mutate(cluster = pam_2G$clustering) %>%
+  group_by(crash_categorica) %>%
+  summarise(media_experiencia = mean(ant_lic)) 
+
+```
+
+Plotear con bigotes lo de arriba 
+
+```{r}
+
+data_cluster %>%
+  filter(crash_categorica != "Ninguno") %>%
+  mutate(crash_categorica = ifelse(crash_categorica == "Uno", "1 crash",
+                                               ifelse(crash_categorica == "Dos", "2 crashes",
+                                               ifelse(crash_categorica == "Tres o mas", "3 or more crashes", "error")))) %>%
+  ggplot(aes(x = crash_categorica, fill=factor(Grupos_variables)))+
+  geom_bar(aes(y = (..count..)/sum(..count..)), position="dodge") +
+  scale_fill_discrete(name="Cluster",
+                      breaks=c(1, 2),
+                      labels=c("Group 1", "Group 2")) +
+  labs(title = "Number of crashes by cluster", 
+       subtitle = "(2007-2013)",
+       x = "Crashes",
+       y = "Percentage") +
+   theme_light()
+
+```
+
+```{r ANOVA TESTING}
+
+## CRASHES CATEGORICA
+data_cluster$Grupos_variables <- as.factor(data_cluster$Grupos_variables)
+crash_categorica_aov <- aov(intensidad_uso_diario ~ Grupos_variables, data = data_cluster)
+summary(crash_categorica_aov)
+
+TukeyHSD(crash_categorica_aov)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

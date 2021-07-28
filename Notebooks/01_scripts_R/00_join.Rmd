@@ -1,0 +1,301 @@
+---
+title: "00_Joined"
+author: "Jose López Galdón"
+date: "8/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE, dpi=500}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- Librerías -->
+
+```{r Libraries, include = FALSE}
+
+  # Carga y limpieza de datos
+library(haven)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(janitor)
+library(ggplot2)
+
+```
+
+
+## BASES DE DATOS
+
+```{r load data}
+
+  # Cargamos la libreria con la información de los conductores
+raw_data_drivers <- read_sav("../00_data/0_raw/RES_VOUCHER_DIC2013-2_3.sav") 
+
+raw_data_drivers <- as.data.frame(raw_data_drivers)
+
+  # Cargamos la librería con los crashes de más de 4G
+raw_data_crash <- read_sav("../00_data/0_raw/A108-RESUMEN_VOUCHER.sav")
+
+raw_data_crash <- as.data.frame(raw_data_crash)
+
+```
+
+Una vez tenemos los datos cargados podemos visualizar los datos:
+
+```{r view data}
+
+## DATOS DE LOS CONDUCTORES
+
+  # Nombres de las columnas
+names(raw_data_drivers)
+
+  # Visualizamos el dataset
+head(raw_data_drivers, 10)
+tail(raw_data_drivers, 10)
+
+  # Estructura de los datos
+str(raw_data_drivers)
+
+  # Dimensión de la base de datos
+dim(raw_data_drivers)
+
+
+
+## DATOS DE LOS CRASHES
+
+  # Nombres de las columnas
+names(raw_data_crash)
+
+  # Visualizamos el dataset
+head(raw_data_crash, 10)
+tail(raw_data_crash, 10)
+
+  # Estructura de los datos
+str(raw_data_crash)
+
+  # Dimensión de la base de datos
+dim(raw_data_crash)
+
+```
+
+## JOIN
+
+Ahora realizaremos el Join, para ello, utilizaremos como clave de unión el código CPI (identifcador único de cada conductor). La idea es agregar la columna Nº de crashes al dataset de los conductores...
+
+```{r join datasets}
+
+  # Primero, filtramos el dataset de crash. De manera, que solo tengamos las columnas COD_CPI y N_Crashes
+raw_data_crash %<>% select(COD_CPI, N_Crashes)
+
+  # Comprobamos la dimensión
+dim(raw_data_crash)
+
+  # Una vez tenemos hecho la selección, unimos los datasets
+raw_data_joined <- left_join(raw_data_drivers, raw_data_crash, by = "COD_CPI")
+
+  # Comprobamos la dimensión
+dim(raw_data_joined)
+
+```
+
+Por último, guardamos la base de datos:
+
+```{r save data}
+
+write.csv(raw_data_joined, file="raw_data_clean.csv")
+
+```
+
+
+## EDA
+
+```{r sex plot}
+
+  # Primero creamos un nuevo dataset
+data <- raw_data_joined %>%
+  clean_names() %>%
+  drop_na(sexo)
+  
+  # Transformamos la variable sexo
+data %<>% mutate(sexo = ifelse(sexo == 1, "Men", "Women"))
+
+  # Ploteamos la distribución del sexo
+data %>% 
+  ggplot(aes(sexo)) + 
+  geom_bar(aes(y = (..count..)/sum(..count..)), fill = "skyblue4") +
+  ylab("Proportion") + xlab("") + labs(title = "Sex distribution", subtitle = "(2007-2013)") +
+  theme_light()
+
+  # Creamos una tabla con la información
+data %>%
+  group_by(sexo) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) 
+
+```
+
+```{r gpos_aut plot}
+
+data %<>% drop_na(gpos_aut)
+
+data %>% 
+  ggplot(aes(gpos_aut)) + 
+  geom_bar(aes(y = (..count..)/sum(..count..)), fill = "skyblue4") +
+  ylab("Proportion") + xlab("") + labs(title = "Groups of Autonomies", subtitle = "(2007-2013)") +
+  theme_light() + coord_flip()
+
+```
+
+```{r recuento de resgistros plot}
+
+data %>%
+  ggplot(aes(recuento_registros)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Recording count", 
+       subtitle = "(2007-2013)",
+       x = "Registrations",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$recuento_registros)
+
+```
+
+```{r dias plot}
+
+data %>%
+  ggplot(aes(dias)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Days", 
+       subtitle = "(2007-2013)",
+       x = "Number of days driven",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$dias)
+
+```
+
+```{r pesopot plot}
+
+data %>%
+  ggplot(aes(pesopot)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Weight-Potency Ratio", 
+       subtitle = "(2007-2013)",
+       x = "Kg/CV",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$pesopot)
+
+```
+
+```{r edad plot}
+
+data %>%
+  ggplot(aes(edad)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Age", 
+       subtitle = "(2007-2013)",
+       x = "Years",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$edad)
+
+```
+
+```{r ant_lic plot}
+
+data %>%
+  ggplot(aes(ant_lic)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Experience", 
+       subtitle = "(2007-2013)",
+       x = "Years",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$ant_lic)
+
+```
+
+```{r marca plot}
+
+data %<>% drop_na(marca)
+
+data %>% 
+  ggplot(aes(marca)) + 
+  geom_bar(aes(y = (..count..)/sum(..count..)), fill = "skyblue4") +
+  ylab("Proportion") + xlab("") + labs(title = "Brands", subtitle = "(2007-2013)") +
+  theme_light() + coord_flip() +
+  xlim("SEAT", "RENAULT", "OPEL", "PEUGEOT", "FORD", "VOLKSWAGEN", "CITROEN", "BMW", "AUDI", "FIAT")
+
+```
+
+```{r vmax_med plot}
+
+data %>%
+  ggplot(aes(v_max_med)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Avg max speed", 
+       subtitle = "(2007-2013)",
+       x = "Km/h",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$v_max_med)
+
+```
+
+```{r vmed_med plot}
+
+data %>%
+  ggplot(aes(v_med_med)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Avg average speed", 
+       subtitle = "(2007-2013)",
+       x = "Km/h",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$v_med_med)
+
+```
+
+```{r durac_med plot}
+
+data %>%
+  ggplot(aes(durac_med)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Average duration", 
+       subtitle = "(2007-2013)",
+       x = "Seconds",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$durac_med)
+
+```
+
+```{r dist_med plot}
+
+data %>%
+  ggplot(aes(dist_med)) +
+  geom_histogram(bins = 50, fill = "skyblue4", color = "gray") +
+  labs(title = "Average distance", 
+       subtitle = "(2007-2013)",
+       x = "Meters",
+       y = "Drivers") +
+   theme_light()
+
+summary(data$dist_med)
+
+```
+
+
+
+
+
+

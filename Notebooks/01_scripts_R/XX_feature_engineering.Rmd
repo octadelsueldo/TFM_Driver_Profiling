@@ -1,0 +1,354 @@
+---
+title: "Feature engineering"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## TFM Perfilado de conductores
+
+
+```{r cars}
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(skimr) # Summary lindo
+library(PerformanceAnalytics)
+library(cluster)
+library(factoextra)
+library(janitor) # Limpieza de nombres
+library(magrittr) #  %<>%
+library(corrplot) # Grafico de correlaciones
+library(DataExplorer)
+library(tidyverse)
+
+raw_data <- read_csv("../00_data/1_preprocessed/raw_data_clean.csv") 
+
+# Vamos a visualizar ahora la base de datos con un analisis descriptivo
+raw_data
+```
+
+
+```{r}
+# Visualizamos los nombres de columnas
+names(raw_data)
+
+# Primer y ultimas filas
+head(raw_data)
+tail(raw_data)
+
+# Dimension del dataset
+
+dim(raw_data)
+```
+
+Tenemos un dataset con casi 100000 conductores y 44 atributos con los cuales podremos clusterizar a los distintos grupos.
+
+```{r}
+#Observamos los objetos dentro del dataset
+str(raw_data)
+skim(raw_data)
+
+  #cuentame los valores nulos en el dataset
+summarise_all(raw_data, funs(sum(is.na(.)))) 
+```
+
+
+# Feature Engineering
+
+La selección de variables es:
+
+SEXO, EDAD, VMax, VMed, DistMed, Pesopot, AntLic, Vairbales creadas, DuracMax, DuracMed, carreteras 100, carreteras 70, carretas 50, Marca como identificador (pero no irá en el cluster, es interesante estudiar las marcas más utilizadas como las 6 primeras, y el resto otros), Grupos_aut y NCrashes.
+
+
+```{r feature}
+  # Variables con NA's a eliminar basandonos en el EDA
+raw_data_prueba <- drop_na(raw_data, c("SEXO", "COD_ZONA_CIRCUL", "COD_COM", "EDAD", "COD_VOUCHER", "ANT_LIC"))
+
+  # Variables con NA's a reemplazar con ceros
+raw_data_prueba[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")][is.na(raw_data_prueba[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")])] <- 0
+
+  # Eliminacion de variables
+raw_data_prueba <- select(raw_data_prueba, -X1, -COD_VOUCHER, -COD_ZONA_CIRCUL, -COD_COM, -TARA, -POTENCIA, -`FEC#NAC`, -FEC_EXP_LIC, -MODELO, -FEC_PARADA_Min, -FEC_PARADA_Max, -VMax_Max, -VMax_Min, -VMed_Max, -VMed_Min, -Dist_max, -Dist_min, -Durac_Max, -Durac_Min, -`filter_$`)
+
+  # Creacion de nuevas variables
+raw_data_prueba <- raw_data_prueba %>% mutate(ANT_SEGURO = (as.Date('2013-12-31') - FEC_ARRANQUE_Min)/365)
+
+raw_data_prueba <- raw_data_prueba %>% mutate(ANNOS_DESDE_ULTARR = (as.Date('2013-12-31') - FEC_ARRANQUE_Max)/365)
+
+  # Eliminamos las variables antiguas
+raw_data_prueba <- select(raw_data_prueba, -FEC_ARRANQUE_Min, -FEC_ARRANQUE_Max)
+
+  # Transformacion de escalas metricas en variable
+# distancia media a kilometros
+raw_data_prueba <- raw_data_prueba %>% mutate(Dist_med = Dist_med/1000)
+
+# Durac_med a minutos
+raw_data_prueba <- raw_data_prueba %>% mutate(Durac_med = Durac_med/60)
+
+# Transformamos la vairbale marca
+raw_data_prueba$MARCA[raw_data_prueba$MARCA != c("SEAT", "RENAULT", "OPEL", "PEUGEOT", "VOLKSWAGEN", "CITROEN") ] <- "Otras"
+raw_data_prueba$MARCA[raw_data_prueba$MARCA == c("SEAT", "RENAULT", "OPEL", "PEUGEOT", "VOLKSWAGEN", "CITROEN") ] <- "Marcas utilizadas"
+
+# Codificamos la variable N_Crashes, de manera que tengamos una variable flag: 0 -> sin accidentes y 1 --> algún accidente)
+#raw_data_prueba$N_Crashes[raw_data_prueba$N_Crashes != 0 ] <- 1
+
+raw_data_prueba %<>% mutate(crash_flag = factor(ifelse(N_Crashes == 0, 0, 1)))
+
+# Transformamos las variables de velocidad
+raw_data_prueba %<>% mutate(vias_alta_capacidad = (METROS_TIPO_VIA_0_Mean + METROS_TIPO_VIA_1_Mean)/1000,
+                            vias_urbanas = (METROS_TIPO_VIA_2_Mean + METROS_TIPO_VIA_3_Mean + METROS_TIPO_VIA_4_Mean + METROS_TIPO_VIA_5_Mean + METROS_TIPO_VIA_6_Mean + METROS_TIPO_VIA_7_Mean)/1000,
+                            resto_carreteras = (METROS_TIPO_VIA_8_Mean + METROS_TIPO_VIA_X_Mean)/1000)
+
+# Creamos una nueva variable con el número de crashes por cada 1000km
+raw_data_prueba %<>%
+  mutate(dist_total_media = (Recuento_registros * Dist_med), 
+         count_crashes_1000km = (N_Crashes/(dist_total_media))*1000
+         )
+
+# Eliminamos las variables antiguas
+raw_data_prueba %<>% select(!starts_with("METROS"))
+
+# Comprobamos los NA
+apply(raw_data_prueba, 2, function(x) {sum(is.na(x))})
+
+```
+
+
+```{r save data with outliers}
+
+  # Creamos un nuevo dataset
+raw_data_outliers <- raw_data_prueba
+
+  # Filtramos por edad y número de registros
+raw_data_outliers %<>% filter(between(EDAD, 18, 30),
+                              between(ANT_LIC, 0, 13),
+                              between(dias, 30, 2235)
+                              )
+
+  # Eliminamos aquellos conductores con un alto número de crashes
+upper_bound <- quantile(raw_data_outliers$N_Crashes, 0.99)
+outliers <- which(raw_data_outliers$N_Crashes > upper_bound)
+raw_data_outliers <- raw_data_outliers[-outliers,]
+
+  # Limpiamos los nombres
+raw_data_outliers <- clean_names(raw_data_outliers)
+
+  # Ploteamos los crashes por cada 1000km
+ggplot(raw_data_outliers, aes(x=ant_lic, y=count_crashes_1000km)) + 
+  geom_point(aes(colour=n_crashes))
+
+  # Eliminamos la variable N_Crahses
+raw_data_outliers %<>% select(-n_crashes)
+
+  # Guardamos el dataset
+write.csv(raw_data_outliers, file="data_processed_with_outliers.csv")
+```
+
+***
+***
+***
+***
+***
+
+
+## Tratamiento de Outliers
+
+```{r out_box}
+
+raw_data_outliers <- raw_data_prueba
+
+# Outliers de Recuento_registros
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$Recuento_registros, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$Recuento_registros %in% outliers),]
+
+# Outliers de pesopot
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$pesopot, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$pesopot %in% outliers),]
+
+# Outliers de edad
+raw_data_outliers <- raw_data_outliers %>% filter(between(EDAD, 18, 30))
+
+# Outliers experiencia
+raw_data_outliers <- raw_data_outliers %>% filter(between(ANT_LIC, 0, 13))
+
+# Outliers dias
+raw_data_outliers <- raw_data_outliers %>% filter(between(dias, 30, 2235))
+
+# Outliers de Durac_med
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$Durac_med, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$Durac_med %in% outliers),]
+
+# Outliers vias_alta_capacidad
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$vias_alta_capacidad, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$vias_alta_capacidad %in% outliers),]
+
+# Outliers vias_urbanas
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$vias_urbanas, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$vias_urbanas %in% outliers),]
+
+# Outliers resto_carreteras
+# Now you can assign the outlier values into a vector
+outliers <- boxplot(raw_data_outliers$resto_carreteras, plot=FALSE)$out
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_outliers <- raw_data_outliers[-which(raw_data_outliers$resto_carreteras %in% outliers),]
+
+```
+
+```{r}
+# Metodo de los percentiles
+raw_data_percentil <- raw_data_prueba
+
+# Outliers de Recuento_registros
+lower_bound <- quantile(raw_data_percentil$Recuento_registros, 0.01)
+upper_bound <- quantile(raw_data_percentil$Recuento_registros, 0.95)
+outliers <- which(raw_data_percentil$Recuento_registros < lower_bound | raw_data_percentil$Recuento_registros > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-which(raw_data_percentil$Recuento_registros %in% outliers),]
+
+# Outliers de pesopot
+lower_bound <- quantile(raw_data_percentil$pesopot, 0.01)
+upper_bound <- quantile(raw_data_percentil$pesopot, 0.95)
+outliers <- which(raw_data_percentil$pesopot < lower_bound | raw_data_percentil$pesopot > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-outliers,]
+
+# Outliers de edad
+raw_data_percentil <- raw_data_percentil %>% filter(between(EDAD, 18, 30))
+
+# Outliers experiencia
+raw_data_percentil <- raw_data_percentil %>% filter(between(ANT_LIC, 0, 13))
+
+# Outliers dias
+raw_data_percentil <- raw_data_percentil %>% filter(between(dias, 30, 2235))
+
+# Outliers de Durac_med
+lower_bound <- quantile(raw_data_percentil$Durac_med, 0.01)
+upper_bound <- quantile(raw_data_percentil$Durac_med, 0.95) 
+outliers <- which(raw_data_percentil$Durac_med < lower_bound | raw_data_percentil$Durac_med > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-outliers,]
+
+# Outliers vias_alta_capacidad
+lower_bound <- quantile(raw_data_percentil$vias_alta_capacidad, 0.01)
+upper_bound <- quantile(raw_data_percentil$vias_alta_capacidad, 0.95)
+outliers <- which(raw_data_percentil$vias_alta_capacidad < lower_bound | raw_data_percentil$vias_alta_capacidad > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-outliers,]
+
+# Outliers vias_urbanas
+lower_bound <- quantile(raw_data_percentil$vias_urbanas, 0.01)
+upper_bound <- quantile(raw_data_percentil$vias_urbanas, 0.95)
+outliers <- which(raw_data_percentil$vias_urbanas < lower_bound | raw_data_percentil$vias_urbanas > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-outliers,]
+
+# Outliers resto_carreteras
+lower_bound <- quantile(raw_data_percentil$resto_carreteras, 0.01)
+upper_bound <- quantile(raw_data_percentil$resto_carreteras, 0.95)
+outliers <- which(raw_data_percentil$resto_carreteras < lower_bound | raw_data_percentil$resto_carreteras > upper_bound)
+# Now you can remove the rows containing the outliers, one possible option is:
+raw_data_percentil <- raw_data_percentil[-outliers,]
+
+```
+
+```{r view last data}
+  # Limpiamos el nombre de las variables
+raw_data_percentil <- clean_names(raw_data_percentil)
+
+  # Eliminamos la variable dias
+raw_data_percentil %<>% select(-dias)
+
+  # Primeras y últimas filas
+head(raw_data_percentil, 10)
+tail(raw_data_percentil, 10)
+
+  # Dimensión de los datos
+dim(raw_data_percentil)
+
+  # Resumen de la tabla
+summary(raw_data_percentil)
+
+```
+
+## Reprocesamiento de la variable crash_flag
+
+```{r}
+  # plot de los crash_flag contra la antiguedad de la licencia
+dat <- data.frame(table(raw_data_percentil$ant_lic, raw_data_percentil$crash_flag))
+names(dat) <- c("ant_lic","crash_flag","Count")
+
+ggplot(data=dat, aes(x=ant_lic, y=Count, fill=crash_flag)) + geom_bar(stat="identity")
+
+  # creamos una variable por los percentiles de los crash_flag
+raw_data_percentil <- raw_data_percentil %>% mutate(percentile = ntile(crash_flag, 10))
+
+  # ploteamos la antiguedad de la licencia por los percentiles de crash_flag
+dat <- data.frame(table(raw_data_percentil$ant_lic, raw_data_percentil$percentile))
+names(dat) <- c("ant_lic","percentile","Count")
+
+ggplot(data=dat, aes(x=ant_lic, y=Count, fill=percentile)) + geom_bar(stat="identity")
+
+freq_crash_antlic <- raw_data_percentil %>%
+  group_by(ant_lic, crash_flag) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+freq_crash_antlic
+```
+```{r}
+# Outliers de edad
+raw_data_crash <- raw_data %>% filter(between(EDAD, 18, 30))
+
+# Outliers experiencia
+raw_data_crash <- raw_data_crash %>% filter(between(ANT_LIC, 0, 13))
+
+# Outliers dias
+raw_data_crash <- raw_data_crash %>% filter(between(dias, 30, 2235))
+
+raw_data_crash[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")][is.na(raw_data_crash[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")])] <- 0
+
+data_crash <- raw_data_crash %>% 
+  select(N_Crashes, ANT_LIC, VMax_med, Recuento_registros, Dist_med, METROS_TIPO_VIA_0_Mean:METROS_TIPO_VIA_X_Mean) %>% 
+  mutate(dist_total_media = (Recuento_registros * Dist_med)/1000, 
+         count_crashes_1000km = N_Crashes/(dist_total_media/1000),
+         vias_alta_capacidad = (METROS_TIPO_VIA_0_Mean + METROS_TIPO_VIA_1_Mean)/1000,
+                            vias_urbanas = (METROS_TIPO_VIA_2_Mean + METROS_TIPO_VIA_3_Mean + METROS_TIPO_VIA_4_Mean + METROS_TIPO_VIA_5_Mean + METROS_TIPO_VIA_6_Mean + METROS_TIPO_VIA_7_Mean)/1000,
+                            resto_carreteras = (METROS_TIPO_VIA_8_Mean + METROS_TIPO_VIA_X_Mean)/1000)
+
+ggplot(data_crash, aes(x=ANT_LIC, y=count_crashes_1000km)) + geom_point(aes(colour=Recuento_registros))
+```
+
+```{r}
+raw_data_sinfiltro <- raw_data
+
+raw_data_sinfiltro[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")][is.na(raw_data_sinfiltro[c("METROS_TIPO_VIA_0_Mean", "METROS_TIPO_VIA_1_Mean", "METROS_TIPO_VIA_2_Mean", "METROS_TIPO_VIA_3_Mean", "METROS_TIPO_VIA_4_Mean", "METROS_TIPO_VIA_5_Mean", "METROS_TIPO_VIA_6_Mean", "METROS_TIPO_VIA_7_Mean", "METROS_TIPO_VIA_8_Mean", "METROS_TIPO_VIA_X_Mean", "N_Crashes")])] <- 0
+
+raw_data_sinfiltro <- raw_data_sinfiltro %>% 
+  select(N_Crashes, ANT_LIC, VMax_med, Recuento_registros, Dist_med, METROS_TIPO_VIA_0_Mean:METROS_TIPO_VIA_X_Mean) %>% 
+  mutate(dist_total_media = (Recuento_registros * Dist_med)/1000, 
+         count_crashes_1000km = N_Crashes/(dist_total_media/1000),
+         vias_alta_capacidad = (METROS_TIPO_VIA_0_Mean + METROS_TIPO_VIA_1_Mean)/1000,
+                            vias_urbanas = (METROS_TIPO_VIA_2_Mean + METROS_TIPO_VIA_3_Mean + METROS_TIPO_VIA_4_Mean + METROS_TIPO_VIA_5_Mean + METROS_TIPO_VIA_6_Mean + METROS_TIPO_VIA_7_Mean)/1000,
+                            resto_carreteras = (METROS_TIPO_VIA_8_Mean + METROS_TIPO_VIA_X_Mean)/1000)
+
+ggplot(raw_data_sinfiltro, aes(x=ANT_LIC, y=count_crashes_1000km)) + geom_point(aes(colour=Recuento_registros))
+```
+Guardamos el dataframe
+
+```{r}
+write.csv(raw_data_percentil, file="data_processed.csv")
+```
+
+
