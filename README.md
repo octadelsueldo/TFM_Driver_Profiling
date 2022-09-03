@@ -54,10 +54,15 @@ help to classify drivers, using a decision tree (supervised algorithm), based on
 dent rate, for which we will use the proxy of crashes (decelerations of more than 4G).
 
 2. Goals of the Project
+
 • Database cleaning
+
 • Identification of essential variables.
+
 • Identification of groups of drivers and behavior patterns
+
 • Prediction by classification tree.
+
 • Proposal for a scorecard.
 
 3. Analysis
@@ -96,9 +101,13 @@ Thanks to the identification of these variables, we have carried out a segmentat
 Using the information provided by the unsupervised algorithm, we make a classificatory prediction of users who will or will not crash. For this, we use a decision tree, this is because it is one of the easiest models to interpret by people without technical knowledge. After optimizing the algorithm we have obtained the following metrics
 
 • Accuracy: 72.25
+
 • AUC: 61.64
+
 • Recall: 21.9
+
 • Accuracy: 36.40
+
 • F1Score: 27.38
 
 To achieve these results, we have assigned different weights to each of the possible classifiers in our algorithm, that is, the False Negative will not have the same weight as the True Positive, since they will be those that we treat as low-risk drivers, charging them a low premium when they will crash in the future. Beyond the results, one of the most important conclusions, which reinforces our initial hypotheses, is that the most significant variable for the tree is the intensity of vehicle use.
